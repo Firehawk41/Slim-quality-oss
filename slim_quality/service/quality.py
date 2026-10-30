@@ -6,6 +6,9 @@
 * Change control: `propose_profile()` / `propose_limits()` by a quality user or manager;
   `decide()` by a manager. Approving adds a profile version or a limit set; nothing is edited.
 * Records: events on an instrument, notes on a point, the signed periodic QC review.
+* Audits and nonconformities (D-113, D-114): `record_audit()`, `raise_nc()`, `add_nc_entry()`;
+  `context_at()` is the QC state an audit shows for a run, `flags_since()` an effectiveness check's
+  evidence.
 """
 
 import json
@@ -20,9 +23,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from slim_quality.domain.actor import QualityActor
+from slim_quality.domain.audits import AuditOutcome, AuditRecord
 from slim_quality.domain.changes import ChangeRequest, NotAllowed
 from slim_quality.domain.enums import ChangeKind, EventKind, LimitMethod, Severity
+from slim_quality.domain.flags import Flag
 from slim_quality.domain.limits import Limits, LimitSet, baseline
+from slim_quality.domain.nonconformity import NcEntry, NcSource, Nonconformity
 from slim_quality.domain.ports import QcSource
 from slim_quality.domain.profile import Profile
 from slim_quality.domain.records import PointNote, QcReview, QualityEvent
@@ -207,3 +213,94 @@ def sign_review(
         period_from=period_from, period_to=period_to, summary=summary, comment=comment, by=actor
     )
     return store.add_review(session, review)
+
+
+# --- audits and nonconformities (D-113, D-114) --------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ContextLine:
+    chart: Chart
+    limits: Limits | None  # in force at the moment asked about
+    flags: tuple[Flag, ...]  # within the days around it
+
+
+def context_at(
+    found: Sequence[Chart], instrument: str, analyte: str, at: datetime, days: int = 7
+) -> list[ContextLine]:
+    """The QC around one moment on one instrument and analyte (and the instrument's internal standard):
+    the limits in force then and the flags from `days` before to a day after. Pass charts drawn `as_of`
+    the moment to see them as they stood."""
+    start, end = at - timedelta(days=days), at + timedelta(days=1)
+    lines = []
+    for c in found:
+        key = c.series.key
+        if key.instrument != instrument or key.analyte not in (analyte, ""):
+            continue
+        before = [i for i, p in enumerate(c.series.points) if p.at <= at]
+        limits = c.limits[before[-1]] if before else None
+        flags = tuple(f for f in c.flags if start <= f.at <= end)
+        lines.append(ContextLine(chart=c, limits=limits, flags=flags))
+    return lines
+
+
+def flags_since(found: Sequence[Chart], instrument: str, analyte: str | None, since: datetime) -> list[Flag]:
+    """Every flag on the instrument (one analyte and the internal standard, or all) since a moment,
+    oldest first: what an effectiveness check looks at."""
+    return sorted(
+        (
+            f
+            for c in found
+            if c.series.key.instrument == instrument
+            and (analyte is None or c.series.key.analyte in (analyte, ""))
+            for f in c.flags
+            if f.at >= since
+        ),
+        key=lambda f: f.at,
+    )
+
+
+def record_audit(
+    session: Session,
+    subject: str,
+    subject_ref: str,
+    outcome: AuditOutcome,
+    findings: str,
+    actor: QualityActor,
+) -> AuditRecord:
+    record = AuditRecord(
+        subject=subject, subject_ref=subject_ref, outcome=outcome, findings=findings, by=actor
+    )
+    return store.add_audit(session, record)
+
+
+def raise_nc(
+    session: Session,
+    title: str,
+    description: str,
+    actor: QualityActor,
+    source: NcSource = NcSource.MANUAL,
+    source_ref: str = "",
+    instrument: str | None = None,
+    analyte: str | None = None,
+    window: tuple[datetime, datetime] | None = None,
+) -> Nonconformity:
+    nc = Nonconformity(
+        title=title,
+        description=description,
+        source=source,
+        source_ref=source_ref,
+        instrument=instrument or None,
+        analyte=analyte or None,
+        window_from=None if window is None else window[0],
+        window_to=None if window is None else window[1],
+        raised_by=actor,
+    )
+    return store.add_nc(session, nc)
+
+
+def add_nc_entry(session: Session, nc_id: int, entry: NcEntry) -> Nonconformity:
+    """Adds an entry the facts allow (`Nonconformity.check`); the state follows."""
+    nc = store.get_nc(session, nc_id)
+    nc.check(entry)
+    return store.add_nc_entry(session, nc_id, entry)

@@ -20,17 +20,21 @@ the screens. **OSS sandbox only:** invented demo data, never a real lab's (`pers
 - **Change control:** a quality user or manager proposes a profile or limits; a manager decides
   (a self-approval is allowed and shown). **Backtest:** what a candidate profile would have flagged.
 - **Records:** events (maintenance, new lot), notes on points, the signed periodic QC review.
+- **Audits and nonconformities:** vertical audits recorded (conforming or findings); nonconformities
+  raised from a flag, event or audit, with an impact assessment per released result, actions, an
+  effectiveness check and closure, the state following the entries (D-113, D-114).
 - **Append-only** tables (database triggers) and `as_of` reads: the rules as they stood on any date.
 
 ## Layout
 
 ```
 slim_quality/
-├── domain/      # pure (stdlib + pydantic): series, limits, profile, changes, records, qc (records → series), ports
+├── domain/      # pure (stdlib + pydantic): series, limits, profile, changes, records, qc (records → series),
+│                #   audits, nonconformity, ports
 ├── monitors/    # pure: base, westgard, ewma, cusum, exceedance, projection, shared, registry, runner
 ├── profiles/    # starter.json: the starter profile
 ├── persistence/ # oss_guard, db, migrate, migrations/, tables, append_only, store (repositories)
-├── service/     # quality (charts, overview, backtest, change control, records), svg (charts as SVG)
+├── service/     # quality (charts, overview, backtest, change control, records, audits, NCs), svg
 └── demo/        # history.py: seeded, invented QC history with a planted drift
 ```
 

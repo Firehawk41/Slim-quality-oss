@@ -102,6 +102,45 @@ quality_reviews = Table(
     _created(),
 )
 
+quality_audits = Table(
+    "quality_audits",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("subject", String(200), nullable=False),
+    Column("subject_ref", String(100), nullable=False, index=True),
+    Column("outcome", Integer, nullable=False),  # AuditOutcome
+    Column("findings", Text, nullable=False),
+    *_by(),
+    _created(),
+)
+
+quality_ncs = Table(
+    "quality_ncs",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("title", String(200), nullable=False),
+    Column("description", Text, nullable=False),
+    Column("source", Integer, nullable=False),  # NcSource
+    Column("source_ref", String(200), nullable=False),
+    Column("instrument", String(100)),
+    Column("analyte", String(50)),
+    Column("window_from", UtcDateTime()),
+    Column("window_to", UtcDateTime()),
+    *_by(),
+    _created(),
+)
+
+quality_nc_entries = Table(
+    "quality_nc_entries",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("nc_id", ForeignKey("quality_ncs.id"), nullable=False, index=True),
+    Column("kind", Integer, nullable=False),  # EntryKind
+    Column("entry", JSON, nullable=False),  # the whole entry, as recorded
+    *_by(),
+    _created(),
+)
+
 TABLES = (
     "quality_changes",
     "quality_decisions",
@@ -110,4 +149,7 @@ TABLES = (
     "quality_events",
     "quality_notes",
     "quality_reviews",
+    "quality_audits",
+    "quality_ncs",
+    "quality_nc_entries",
 )

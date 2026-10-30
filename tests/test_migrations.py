@@ -19,7 +19,7 @@ def _version(connection) -> str | None:
 def test_upgrade_downgrade_upgrade(engine):
     with engine.begin() as connection:
         migrate.upgrade(connection)
-        assert _version(connection) == "0001"
+        assert _version(connection) == "0002"
         migrate.downgrade(connection)
         assert _version(connection) is None
         migrate.upgrade(connection)
