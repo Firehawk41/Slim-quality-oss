@@ -110,3 +110,29 @@ def test_events_notes_and_a_signed_review(session):
     assert store.reviews(session) == [review]
     with pytest.raises(ValueError, match="timezone-aware"):
         store.reviews(session, as_of=datetime(2026, 1, 1))
+
+
+# --- review 2026-10-30 (Q1, Q4): change control under concurrency --------------------------------
+
+
+def test_q1_approving_a_proposal_made_on_an_older_profile_is_refused(session):
+    first = q.propose_profile(session, without_ewma(q.STARTER), "EWMA off", USER)
+    second = q.propose_profile(session, q.STARTER, "CUSUM later", USER)  # both on v0
+    q.decide(session, first.id, True, "", MANAGER)
+    with pytest.raises(q.ChangeConflict, match="v0, but v1 is in force"):
+        q.decide(session, second.id, True, "", MANAGER)  # would silently turn EWMA back on
+    assert q.decide(session, second.id, False, "stale", MANAGER).status == ChangeStatus.REJECTED
+    again = q.propose_profile(session, q.current_profile(session), "from v1", USER)
+    assert again.profile.version == 1 and q.decide(session, again.id, True, "", MANAGER).decision.approved
+
+
+def test_q4_a_decision_someone_else_made_first_is_a_conflict(session, monkeypatch):
+    key = q.charts(session, SOURCE)[0].series.key
+    limits = Limits(method=LimitMethod.CERTIFICATE, center=Decimal("1"), sd=Decimal("0.03"))
+    change = q.propose_limits(session, key, limits, END, "certificate", USER)
+    q.decide(session, change.id, True, "", MANAGER)
+    undecided = change  # what a second manager's page still showed
+    monkeypatch.setattr(store, "get_change", lambda *_: undecided)
+    with pytest.raises(q.ChangeConflict, match="decided this change"):
+        q.decide(session, change.id, True, "", MANAGER)
+    assert len(store.list_changes(session)) == 1  # nothing half-written

@@ -33,3 +33,11 @@ def test_a_one_sided_chart_and_an_empty_one():
     assert "ppb" in render(chart)
     empty = evaluate([Series(key=key(), points=())], STARTER)[0]
     assert "No points yet" in render(empty)
+
+
+def test_q2_dates_are_the_labs_not_utcs():  # review 2026-10-30
+    from zoneinfo import ZoneInfo
+
+    chart = CHARTS[0]
+    late = chart.series.points[-1].at.astimezone(ZoneInfo("Pacific/Kiritimati"))  # UTC+14: a day ahead
+    assert f"{late:%Y-%m-%d}" in render(chart, tz=ZoneInfo("Pacific/Kiritimati"))
