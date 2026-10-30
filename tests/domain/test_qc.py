@@ -78,3 +78,15 @@ def test_the_demo_history_is_fixed_and_finds_what_was_planted():
     assert all("SHARED_SHIFT" in {f.code for f in c.flags} for c in zinc) and len(zinc) == 2
     recent = DemoSource(END).series(since=END - timedelta(days=7))
     assert all(p.at >= END - timedelta(days=7) for s in recent for p in s.points)
+
+
+def test_q6_one_level_however_the_file_wrote_it():  # review 2026-10-30b
+    records = [
+        record("check", "4.9", 1, expected=Decimal("5"), material="CCV"),
+        record("check", "5.0", 2, expected=Decimal("5.000"), material="CCV"),
+        record("check", "99", 3, expected=Decimal("1E+2"), material="CCV"),
+    ]
+    levels = sorted(s.key.level for s in to_series(records) if s.key.measure == Measure.CHECK_RECOVERY)
+    assert levels == [Decimal("5"), Decimal("100")] and "@ 100" in str(
+        [s.key.label for s in to_series(records)]
+    )

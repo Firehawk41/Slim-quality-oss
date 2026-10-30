@@ -1,6 +1,8 @@
 """The service on a migrated database: change control, the rules as they stood, records, backtest."""
 
+import json
 import time
+from collections import Counter
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -198,3 +200,70 @@ def test_context_at_a_run_and_flags_since_an_action(session):
     since = q.flags_since(found, "ICP-MS 1", "Na", END - timedelta(days=10))
     assert since and all(f.at >= END - timedelta(days=10) for f in since)
     assert len(q.flags_since(found, "ICP-MS 1", None, END - timedelta(days=10))) >= len(since)
+
+
+# --- review 2026-10-30b ---------------------------------------------------------------------------
+
+
+def test_q5_charts_since_and_backtest_judge_the_whole_history(session):
+    """Cutting the history first moved the provisional limits: the backtest's "in force" counts and a
+    chart shown from a date must be the full charts' own."""
+    full = {c.series.key.slug: c for c in q.charts(session, SOURCE)}
+    since = END - timedelta(days=20)
+    for c in q.charts(session, SOURCE, since=since):
+        whole = full[c.series.key.slug]
+        assert c.limits == whole.limits[len(whole.series.points) - len(c.series.points) :]
+        assert [f.at for f in c.flags] == [f.at for f in whole.flags if f.at >= since]
+        assert all(c.series.points[f.index].at == f.at for f in c.flags)
+    rows = {(r.tool, r.code): r.in_force for r in q.backtest(session, SOURCE, q.STARTER, since)}
+    expected = Counter((f.tool, f.code) for c in full.values() for f in c.flags if f.at >= since)
+    assert rows == dict(expected)
+    assert all(c.series.points == () for c in q.charts(session, SOURCE, since=END + timedelta(days=1)))
+
+
+def test_q7_verify_proves_the_records_hold_together(session):
+    from sqlalchemy import text
+
+    from slim_quality.domain.nonconformity import EntryKind, NcEntry
+    from slim_quality.service.verify import verify
+
+    change = q.propose_profile(session, without_ewma(q.STARTER), "x", USER)
+    q.decide(session, change.id, True, "", MANAGER)
+    nc = q.raise_nc(session, "Cones", "ISTD low", USER)
+    q.add_nc_entry(session, nc.id, NcEntry(kind=EntryKind.ASSESSED, note="nothing released", by=MANAGER))
+    report = verify(session)
+    assert report.ok and (report.profiles, report.nonconformities) == (1, 1)
+    # A close written around the rules (no action, no effectiveness check): verify catches it.
+    closed = NcEntry(kind=EntryKind.CLOSED, note="done", by=MANAGER).model_dump(mode="json", exclude={"at"})
+    session.execute(
+        text("INSERT INTO quality_nc_entries (nc_id, kind, entry, by_id, by) VALUES (:n, 4, :e, 'qm', :b)"),
+        {"n": nc.id, "e": json.dumps(closed), "b": json.dumps(MANAGER.model_dump(mode="json"))},
+    )
+    session.execute(
+        text("INSERT INTO quality_profiles (version, change_id, profile) VALUES (3, :c, '{}')"),
+        {"c": q.propose_profile(session, q.STARTER, "never decided", USER).id},
+    )
+    problems = verify(session).problems
+    assert any("NC-" in p and "closed" in p and "effective" in p for p in problems)
+    assert any("not 1..2" in p for p in problems) and any("no approved change" in p for p in problems)
+
+
+def test_q8_an_entry_locks_its_nonconformity_first(session):
+    from slim_quality.domain.nonconformity import EntryKind, NcEntry
+
+    with pytest.raises(store.NotFound):
+        q.add_nc_entry(session, 999, NcEntry(kind=EntryKind.NOTE, note="x", by=USER))
+    nc = q.raise_nc(session, "Cones", "ISTD low", USER)
+    statements = []
+    from sqlalchemy import event
+
+    listen = lambda *args: statements.append(args[2])  # noqa: E731
+    event.listen(session.get_bind(), "before_cursor_execute", listen)
+    try:
+        q.add_nc_entry(session, nc.id, NcEntry(kind=EntryKind.NOTE, note="x", by=USER))
+    finally:
+        event.remove(session.get_bind(), "before_cursor_execute", listen)
+    first = statements[0]
+    if session.get_bind().dialect.name == "postgresql":
+        assert "FOR UPDATE" in first
+    assert "quality_ncs" in first

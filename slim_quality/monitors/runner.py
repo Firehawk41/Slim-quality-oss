@@ -8,6 +8,7 @@ baselines. Excluded points are drawn but never judged. Pure: same input, same ch
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import datetime
 
 from pydantic import ValidationError
 
@@ -35,6 +36,23 @@ class Chart:
     @property
     def current(self) -> Limits | None:
         return self.limits[-1] if self.limits else None
+
+    def since(self, start: datetime) -> "Chart":
+        """The chart from `start` on: the points, their limits and the flags on them, judged on the whole
+        history (provisional limits come from a series' first points, wherever the view starts)."""
+        keep = [i for i, p in enumerate(self.series.points) if p.at >= start]
+        if not keep:
+            return Chart(self.series.model_copy(update={"points": ()}), (), self.window, (), None)
+        first = keep[0]
+        flags = tuple(f.model_copy(update={"index": f.index - first}) for f in self.flags if f.index >= first)
+        points = self.series.points[first:]
+        return Chart(
+            self.series.model_copy(update={"points": points}),
+            self.limits[first:],
+            self.window,
+            flags,
+            self.trend,
+        )
 
 
 def check_profile(profile: Profile) -> None:

@@ -344,6 +344,14 @@ def add_nc_entry(session: Session, nc_id: int, entry: NcEntry) -> Nonconformity:
     return get_nc(session, nc_id)
 
 
+def lock_nc(session: Session, nc_id: int) -> None:
+    """Holds the nonconformity's row until the transaction ends (Postgres; SQLite writes one at a time), so
+    two entries can't both be checked against the same state (review 2026-10-30b Q8)."""
+    found = session.scalar(select(quality_ncs.c.id).where(quality_ncs.c.id == nc_id).with_for_update())
+    if found is None:
+        raise NotFound(f"no nonconformity {nc_id}")
+
+
 def get_nc(session: Session, nc_id: int, as_of: datetime | None = None) -> Nonconformity:
     found = list_ncs(session, as_of=as_of, ids=(nc_id,))
     if not found:
