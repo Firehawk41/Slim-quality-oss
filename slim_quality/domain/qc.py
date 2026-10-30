@@ -10,7 +10,7 @@ blanks, check standards, CRMs and calibrations can feed slim-quality.
 
 from collections import defaultdict
 from collections.abc import Iterable
-from decimal import localcontext
+from decimal import Decimal, localcontext
 from typing import Literal
 
 from pydantic import AwareDatetime, Field
@@ -52,6 +52,12 @@ class CalibrationRecord(Frozen):
     bec: Dec | None = None
 
 
+def _canonical(value: Decimal) -> Decimal:
+    """5, 5.0 and 5.000 are one level (review 2026-10-30b Q6): a series' key must not depend on how a
+    file wrote the number, or the same check standard splits into two series and loses its limits."""
+    return Decimal(format(value.normalize(), "f"))
+
+
 def to_series(
     records: Iterable[QcRecord], calibrations: Iterable[CalibrationRecord] = ()
 ) -> tuple[Series, ...]:
@@ -79,7 +85,7 @@ def to_series(
             add(SeriesKey(measure=Measure.BLANK_LEVEL, **base), r.measured, r.unit, r, r.ref)
         elif r.expected is not None and r.expected > 0:
             measure = Measure.CHECK_RECOVERY if r.kind == "check" else Measure.CRM_RECOVERY
-            qc = dict(base, material=r.material, level=r.expected)
+            qc = dict(base, material=r.material, level=_canonical(r.expected))
             with localcontext() as context:
                 context.prec = 28
                 recovery = r.measured / r.expected

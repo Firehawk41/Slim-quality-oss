@@ -56,8 +56,11 @@ def charts(
     as_of: datetime | None = None,
     profile: Profile | None = None,
 ) -> tuple[Chart, ...]:
-    series = source.series(since=since, as_of=as_of)
-    return evaluate(series, profile or current_profile(session, as_of), store.limit_sets(session, as_of))
+    """Every series judged on its whole history; with `since`, shown from then on (review 2026-10-30b Q5:
+    cutting the history first would move the provisional limits)."""
+    series = source.series(as_of=as_of)
+    found = evaluate(series, profile or current_profile(session, as_of), store.limit_sets(session, as_of))
+    return found if since is None else tuple(c.since(since) for c in found)
 
 
 def chart(session: Session, source: QcSource, slug: str, as_of: datetime | None = None) -> Chart:
@@ -103,13 +106,22 @@ class BacktestRow:
 def backtest(
     session: Session, source: QcSource, candidate: Profile, since: datetime | None = None
 ) -> list[BacktestRow]:
-    """How many flags each tool and code would have raised over the same history: the profile in force
-    against the candidate. Nothing is stored."""
+    """How many flags each tool and code would have raised since `since`: the profile in force against the
+    candidate, both judged on the whole history (so the in-force counts are the charts' own). Nothing is
+    stored."""
     check_profile(candidate)
-    series = source.series(since=since)
+    series = source.series()
     sets = store.limit_sets(session)
-    now = Counter((f.tool, f.code) for c in evaluate(series, current_profile(session), sets) for f in c.flags)
-    then = Counter((f.tool, f.code) for c in evaluate(series, candidate, sets) for f in c.flags)
+
+    def counted(profile: Profile) -> Counter:
+        return Counter(
+            (f.tool, f.code)
+            for c in evaluate(series, profile, sets)
+            for f in c.flags
+            if since is None or f.at >= since
+        )
+
+    now, then = counted(current_profile(session)), counted(candidate)
     return [
         BacktestRow(tool, code, now[(tool, code)], then[(tool, code)])
         for tool, code in sorted(now.keys() | then.keys())
@@ -300,7 +312,9 @@ def raise_nc(
 
 
 def add_nc_entry(session: Session, nc_id: int, entry: NcEntry) -> Nonconformity:
-    """Adds an entry the facts allow (`Nonconformity.check`); the state follows."""
+    """Adds an entry the facts allow (`Nonconformity.check`); the state follows. The NC's row is locked
+    first, so a second entry waits and is checked against the state the first left."""
+    store.lock_nc(session, nc_id)
     nc = store.get_nc(session, nc_id)
     nc.check(entry)
     return store.add_nc_entry(session, nc_id, entry)
