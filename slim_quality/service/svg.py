@@ -6,7 +6,7 @@ of its worst flag, and its tooltip (`<title>`) says what each flag found. Exclud
 """
 
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import datetime, tzinfo
 from xml.sax.saxutils import escape
 
 from slim_quality.domain.enums import Measure, Severity
@@ -25,7 +25,8 @@ def _value_text(chart: Chart, value) -> str:
     return f"{value:.4g} {chart.series.unit}".strip()
 
 
-def render(chart: Chart, events: Sequence[QualityEvent] = ()) -> str:
+def render(chart: Chart, events: Sequence[QualityEvent] = (), tz: tzinfo | None = None) -> str:
+    """`tz`: the lab's, so a point's date is the lab's day, not UTC's (review Q2)."""
     points = chart.series.points
     if not points:
         return '<svg xmlns="http://www.w3.org/2000/svg" role="img" viewBox="0 0 960 40"><text x="8" y="24">No points yet</text></svg>'
@@ -106,7 +107,7 @@ def render(chart: Chart, events: Sequence[QualityEvent] = ()) -> str:
         colour = COLOURS[worst]
         fill = "none" if p.excluded else colour
         lines = [
-            f"{p.at:%Y-%m-%d %H:%M} · {p.run_code} · {_value_text(chart, p.value)}"
+            f"{p.at.astimezone(tz):%Y-%m-%d %H:%M} · {p.run_code} · {_value_text(chart, p.value)}"
             + (" · excluded" if p.excluded else "")
         ]
         lines += [f"{f.severity.name} {f.code}: {f.message}" for f in found]
@@ -119,7 +120,7 @@ def render(chart: Chart, events: Sequence[QualityEvent] = ()) -> str:
         )
     for at, anchor in ((points[0].at, "start"), (points[-1].at, "end")):
         out.append(
-            f'<text x="{x(at):.1f}" y="{HEIGHT - 12}" text-anchor="{anchor}" font-size="11" fill="#4b6584">{at:%Y-%m-%d}</text>'
+            f'<text x="{x(at):.1f}" y="{HEIGHT - 12}" text-anchor="{anchor}" font-size="11" fill="#4b6584">{at.astimezone(tz):%Y-%m-%d}</text>'
         )
     out.append("</svg>")
     return "\n".join(out)

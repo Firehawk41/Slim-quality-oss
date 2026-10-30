@@ -16,6 +16,7 @@ from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from slim_quality.domain.actor import QualityActor
@@ -112,9 +113,17 @@ def backtest(
 # --- change control -----------------------------------------------------------------------------
 
 
+class ChangeConflict(RuntimeError):
+    """The change can't be decided as it stands: the profile moved on since it was proposed, or someone
+    else decided it first. Nothing was written; propose again from the profile in force."""
+
+
 def propose_profile(session: Session, profile: Profile, reason: str, actor: QualityActor) -> ChangeRequest:
+    """A proposal records the version it was made from (its `version`), so approving it can never undo
+    a change approved in between (review Q1)."""
     check_profile(profile)
-    change = ChangeRequest(kind=ChangeKind.PROFILE, reason=reason, proposed_by=actor, profile=profile)
+    based_on = profile.model_copy(update={"version": current_profile(session).version})
+    change = ChangeRequest(kind=ChangeKind.PROFILE, reason=reason, proposed_by=actor, profile=based_on)
     return store.add_change(session, change)
 
 
@@ -143,7 +152,17 @@ def propose_limits(
 def decide(session: Session, change_id: int, approved: bool, note: str, actor: QualityActor) -> ChangeRequest:
     change = store.get_change(session, change_id)
     decision = change.decide(actor, approved, note)
-    return store.add_decision(session, change, decision)
+    in_force = current_profile(session).version
+    if approved and change.profile is not None and change.profile.version != in_force:
+        raise ChangeConflict(
+            f"proposed on profile v{change.profile.version}, but v{in_force} is in force now: "
+            "reject it and propose again from the current profile"
+        )
+    try:
+        with session.begin_nested():
+            return store.add_decision(session, change, decision)
+    except IntegrityError:
+        raise ChangeConflict("someone else decided this change (or approved a profile) first") from None
 
 
 # --- records ------------------------------------------------------------------------------------
