@@ -5,7 +5,7 @@ import pytest
 from pydantic import ValidationError
 
 from slim_quality.domain.changes import ChangeRequest, NotAllowed
-from slim_quality.domain.enums import ChangeKind, ChangeStatus, EventKind, LimitMethod, Measure
+from slim_quality.domain.enums import ChangeKind, ChangeStatus, EventKind, LimitMethod, Measure, Severity
 from slim_quality.domain.limits import Limits, LimitSet, Window, baseline
 from slim_quality.domain.profile import MeasurePolicy, Profile, ToolSetting
 from slim_quality.domain.records import QcReview
@@ -121,3 +121,38 @@ def test_a_review_is_signed_by_a_manager_over_a_real_period():
 def test_labels():
     assert Measure.CRM_RECOVERY.label == "CRM recovery" and Measure.CRM_RECOVERY.is_recovery
     assert EventKind.NEW_LOT.label == "New lot"
+
+
+def test_differences_say_what_a_profile_change_does():
+    from slim_quality.domain.profile import differences
+
+    before = Profile(
+        tools=(
+            ToolSetting(
+                tool="westgard@1", measures=frozenset({Measure.CHECK_RECOVERY}), params={"rules": ["1_3s"]}
+            ),
+        ),
+        measures={Measure.CHECK_RECOVERY: MeasurePolicy(window_low=D("0.75"), window_high=D("1.25"))},
+    )
+    after = Profile(
+        tools=(
+            ToolSetting(
+                tool="westgard@1",
+                measures=frozenset({Measure.CRM_RECOVERY}),
+                params={"rules": ["1_3s", "2_2s"]},
+                severities={"WG_1_3S": Severity.WARN},
+            ),
+            ToolSetting(tool="cusum@1"),
+        ),
+        measures={Measure.CHECK_RECOVERY: MeasurePolicy(window_low=D("0.8"))},
+    )
+    assert differences(before, after) == [
+        "westgard@1: also on CRM recovery",
+        "westgard@1: no longer on Check standard recovery",
+        "westgard@1: rules 1_3s → 1_3s, 2_2s",
+        "westgard@1: WG_1_3S default → WARN",
+        "cusum@1: on",
+        "Check standard recovery: history from 20 points, window 0.75–1.25"
+        " → history from 20 points, window 0.8–…",
+    ]
+    assert differences(after, after) == []
