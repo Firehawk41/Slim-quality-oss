@@ -160,14 +160,19 @@ class Nonconformity(Frozen):
 
     def check(self, entry: NcEntry) -> None:
         """Refuses an entry the facts don't allow yet (or any more)."""
+        self.allows(entry.kind, entry.by)
+
+    def allows(self, kind: EntryKind, by: QualityActor) -> None:
+        """Whether `by` may add an entry of this kind now; ask before reading a form, so a refusal is
+        a refusal, not a complaint about the form."""
         state = self.state
         if state == NcState.CLOSED:
             raise NotAllowed(f"{self.number} is closed")
-        if entry.kind in (EntryKind.ASSESSED, EntryKind.CLOSED) and not entry.by.is_manager:
+        if kind in (EntryKind.ASSESSED, EntryKind.CLOSED) and not by.is_manager:
             raise NotAllowed("a quality manager assesses and closes a nonconformity")
-        if entry.kind == EntryKind.ACTION and state == NcState.OPEN:
+        if kind == EntryKind.ACTION and state == NcState.OPEN:
             raise NotAllowed("assess the impact before the action")
-        if entry.kind == EntryKind.EFFECTIVENESS and state != NcState.ACTION_TAKEN:
+        if kind == EntryKind.EFFECTIVENESS and state != NcState.ACTION_TAKEN:
             raise NotAllowed("an effectiveness check follows an action")
-        if entry.kind == EntryKind.CLOSED and state != NcState.EFFECTIVE:
+        if kind == EntryKind.CLOSED and state != NcState.EFFECTIVE:
             raise NotAllowed("close it once the action is shown effective")

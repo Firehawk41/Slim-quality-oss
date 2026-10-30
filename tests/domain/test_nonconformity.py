@@ -89,6 +89,12 @@ def test_entries_the_facts_dont_allow_are_refused(before, entry, message):
         nc(*before).check(entry)
 
 
+def test_allows_answers_before_any_form_is_read():
+    with pytest.raises(NotAllowed, match="a quality manager"):
+        nc().allows(EntryKind.ASSESSED, USER)
+    nc().allows(EntryKind.ASSESSED, MANAGER)
+
+
 def test_what_is_allowed_passes():
     nc().check(assessed())
     nc(assessed()).check(action())
