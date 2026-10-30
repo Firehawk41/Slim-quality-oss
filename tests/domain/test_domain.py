@@ -57,7 +57,7 @@ def test_series_key_slug_round_trips_awkward_text():
     assert SeriesKey.from_slug(k.slug) == k
     assert SeriesKey.from_slug(key().slug) == key()
     assert "ICP~MS/1 %" in k.label and "(CP-Off-None)" in k.label and "@ 5.0" in k.label
-    assert "all" in SeriesKey(measure=Measure.ISTD_RECOVERY, instrument="I").label
+    assert SeriesKey(measure=Measure.ISTD_RECOVERY, instrument="I").label == "I · Internal standard recovery"
     with pytest.raises(ValueError, match="not a series id"):
         SeriesKey.from_slug("nope")
 

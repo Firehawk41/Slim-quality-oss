@@ -72,7 +72,7 @@ def test_the_demo_history_is_fixed_and_finds_what_was_planted():
     records, calibrations = as_records(runs[:2])
     assert len(records) == 2 * (6 + 3) and len(calibrations) == 2 * 3
     charts = {c.series.key.label: c for c in evaluate(DemoSource(END).series(), STARTER)}
-    drift = charts["ICP-MS 1 · all · Internal standard recovery"]
+    drift = charts["ICP-MS 1 · Internal standard recovery"]
     assert {"EWMA_LOW", "LIMIT_AHEAD"} <= {f.code for f in drift.flags}
     zinc = [c for label, c in charts.items() if "Zn (KED) · Method blank" in label]
     assert all("SHARED_SHIFT" in {f.code for f in c.flags} for c in zinc) and len(zinc) == 2

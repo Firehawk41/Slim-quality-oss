@@ -55,7 +55,8 @@ class SeriesKey(Frozen):
         what = " ".join(p for p in (self.analyte, f"({self.conditions})" if self.conditions else "") if p)
         level = f" @ {self.level}" if self.level is not None else ""
         material = f" {self.material}" if self.material else ""
-        return f"{self.instrument} · {what or 'all'} · {self.measure.label}{material}{level}"
+        parts = (self.instrument, what, f"{self.measure.label}{material}{level}")
+        return " · ".join(p for p in parts if p)
 
 
 class Point(Frozen):
