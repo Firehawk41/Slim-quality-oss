@@ -136,3 +136,65 @@ def test_q4_a_decision_someone_else_made_first_is_a_conflict(session, monkeypatc
     with pytest.raises(q.ChangeConflict, match="decided this change"):
         q.decide(session, change.id, True, "", MANAGER)
     assert len(store.list_changes(session)) == 1  # nothing half-written
+
+
+# --- audits and nonconformities (D-113, D-114) --------------------------------------------------------
+
+
+def test_audits_are_recorded_newest_first(session):
+    from slim_quality.domain.audits import AuditOutcome
+
+    first = q.record_audit(session, "Report 3 (TR00003)", "issue:3", AuditOutcome.CONFORMING, "", USER)
+    second = q.record_audit(
+        session, "Report 5 (TR00005)", "issue:5", AuditOutcome.FINDINGS, "no lot on the CCV", MANAGER
+    )
+    assert store.audits(session) == [second, first] and store.audits(session, "issue:3") == [first]
+    assert first.at is not None and first.id is not None
+
+
+def test_a_nonconformity_from_a_flag_through_to_closed(session):
+    from slim_quality.domain.nonconformity import (
+        EntryKind,
+        ImpactDecision,
+        ImpactLine,
+        NcEntry,
+        NcSource,
+        NcState,
+    )
+
+    window = (END - timedelta(days=35), END)
+    raised = q.raise_nc(
+        session, "Cone wear", "ISTD sagging", USER, NcSource.FLAG, "flag:x", "ICP-MS 1", "", window
+    )
+    assert raised.state == NcState.OPEN and raised.analyte is None and raised.window_from == window[0]
+    line = ImpactLine(
+        ref="TR1-01|1|Cu|1", label="TR1-01 Cu", decision=ImpactDecision.NO_ACTION, note="inside ±"
+    )
+    q.add_nc_entry(session, raised.id, NcEntry(kind=EntryKind.ASSESSED, impact=(line,), by=MANAGER))
+    with pytest.raises(NotAllowed):
+        q.add_nc_entry(session, raised.id, NcEntry(kind=EntryKind.CLOSED, note="x", by=MANAGER))
+    before = instant(session)
+    act = NcEntry(kind=EntryKind.ACTION, root_cause="worn cones", action="replaced", owner="QU", by=USER)
+    q.add_nc_entry(session, raised.id, act)
+    q.add_nc_entry(session, raised.id, NcEntry(kind=EntryKind.EFFECTIVENESS, effective=True, by=USER))
+    done = q.add_nc_entry(session, raised.id, NcEntry(kind=EntryKind.CLOSED, note="effective", by=MANAGER))
+    assert done.state == NcState.CLOSED and [e.kind for e in done.entries][0] == EntryKind.ASSESSED
+    assert done.assessment.impact == (line,) and all(e.at for e in done.entries)
+    assert store.get_nc(session, raised.id, as_of=before).state == NcState.ASSESSED  # as it stood
+    assert store.list_ncs(session) == [done]
+    with pytest.raises(store.NotFound):
+        store.get_nc(session, 999)
+
+
+def test_context_at_a_run_and_flags_since_an_action(session):
+    found = q.charts(session, SOURCE)
+    at = END - timedelta(days=3)
+    lines = q.context_at(found, "ICP-MS 1", "Na", at)
+    keys = {(c.chart.series.key.analyte, c.chart.series.key.measure) for c in lines}
+    assert ("", Measure.ISTD_RECOVERY) in keys and all(k[0] in ("Na", "") for k in keys)
+    assert any(c.flags for c in lines) and all(c.limits is not None for c in lines)
+    early = q.context_at(found, "ICP-MS 1", "Na", END - timedelta(days=400))
+    assert all(c.limits is None and c.flags == () for c in early)
+    since = q.flags_since(found, "ICP-MS 1", "Na", END - timedelta(days=10))
+    assert since and all(f.at >= END - timedelta(days=10) for f in since)
+    assert len(q.flags_since(found, "ICP-MS 1", None, END - timedelta(days=10))) >= len(since)

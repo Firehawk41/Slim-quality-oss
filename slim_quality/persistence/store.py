@@ -7,16 +7,21 @@ from sqlalchemy import Column, select
 from sqlalchemy.orm import Session
 
 from slim_quality.domain.actor import QualityActor
+from slim_quality.domain.audits import AuditOutcome, AuditRecord
 from slim_quality.domain.changes import ChangeRequest, Decision
 from slim_quality.domain.enums import ChangeKind, EventKind
 from slim_quality.domain.limits import LimitSet
+from slim_quality.domain.nonconformity import NcEntry, NcSource, Nonconformity
 from slim_quality.domain.profile import Profile
 from slim_quality.domain.records import PointNote, QcReview, QualityEvent
 from slim_quality.persistence.tables import (
+    quality_audits,
     quality_changes,
     quality_decisions,
     quality_events,
     quality_limit_sets,
+    quality_nc_entries,
+    quality_ncs,
     quality_notes,
     quality_profiles,
     quality_reviews,
@@ -262,6 +267,122 @@ def reviews(session: Session, as_of: datetime | None = None) -> list[QcReview]:
             comment=r.comment,
             by=_actor(r.by),
             at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+# --- audits and nonconformities (D-113, D-114) --------------------------------------------------------
+
+
+def add_audit(session: Session, record: AuditRecord) -> AuditRecord:
+    audit_id = session.execute(
+        quality_audits.insert().values(
+            subject=record.subject,
+            subject_ref=record.subject_ref,
+            outcome=int(record.outcome),
+            findings=record.findings,
+            by_id=record.by.id,
+            by=record.by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return audits(session, ids=(audit_id,))[0]
+
+
+def audits(
+    session: Session, subject_ref: str | None = None, as_of: datetime | None = None, ids=()
+) -> list[AuditRecord]:
+    """Newest first."""
+    where = [as_of_filter(quality_audits.c.created_at, as_of)]
+    if subject_ref is not None:
+        where.append(quality_audits.c.subject_ref == subject_ref)
+    if ids:
+        where.append(quality_audits.c.id.in_(ids))
+    rows = session.execute(select(quality_audits).where(*where).order_by(quality_audits.c.id.desc()))
+    return [
+        AuditRecord(
+            id=r.id,
+            subject=r.subject,
+            subject_ref=r.subject_ref,
+            outcome=AuditOutcome(r.outcome),
+            findings=r.findings,
+            by=_actor(r.by),
+            at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+def add_nc(session: Session, nc: Nonconformity) -> Nonconformity:
+    nc_id = session.execute(
+        quality_ncs.insert().values(
+            title=nc.title,
+            description=nc.description,
+            source=int(nc.source),
+            source_ref=nc.source_ref,
+            instrument=nc.instrument,
+            analyte=nc.analyte,
+            window_from=nc.window_from,
+            window_to=nc.window_to,
+            by_id=nc.raised_by.id,
+            by=nc.raised_by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return get_nc(session, nc_id)
+
+
+def add_nc_entry(session: Session, nc_id: int, entry: NcEntry) -> Nonconformity:
+    session.execute(
+        quality_nc_entries.insert().values(
+            nc_id=nc_id,
+            kind=int(entry.kind),
+            entry=entry.model_dump(mode="json", exclude={"at"}),
+            by_id=entry.by.id,
+            by=entry.by.model_dump(mode="json"),
+        )
+    )
+    return get_nc(session, nc_id)
+
+
+def get_nc(session: Session, nc_id: int, as_of: datetime | None = None) -> Nonconformity:
+    found = list_ncs(session, as_of=as_of, ids=(nc_id,))
+    if not found:
+        raise NotFound(f"no nonconformity {nc_id}")
+    return found[0]
+
+
+def list_ncs(session: Session, as_of: datetime | None = None, ids=()) -> list[Nonconformity]:
+    """Newest first, each with its entries, oldest first."""
+    where = [as_of_filter(quality_ncs.c.created_at, as_of)]
+    if ids:
+        where.append(quality_ncs.c.id.in_(ids))
+    rows = session.execute(select(quality_ncs).where(*where).order_by(quality_ncs.c.id.desc())).all()
+    if not rows:
+        return []
+    entries: dict[int, list[NcEntry]] = {}
+    for e in session.execute(
+        select(quality_nc_entries)
+        .where(
+            quality_nc_entries.c.nc_id.in_([r.id for r in rows]),
+            as_of_filter(quality_nc_entries.c.created_at, as_of),
+        )
+        .order_by(quality_nc_entries.c.id)
+    ):
+        entries.setdefault(e.nc_id, []).append(NcEntry.model_validate(e.entry | {"at": e.created_at}))
+    return [
+        Nonconformity(
+            id=r.id,
+            title=r.title,
+            description=r.description,
+            source=NcSource(r.source),
+            source_ref=r.source_ref,
+            instrument=r.instrument,
+            analyte=r.analyte,
+            window_from=r.window_from,
+            window_to=r.window_to,
+            raised_by=_actor(r.by),
+            raised_at=r.created_at,
+            entries=tuple(entries.get(r.id, ())),
         )
         for r in rows
     ]
