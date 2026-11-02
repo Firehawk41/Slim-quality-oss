@@ -9,21 +9,33 @@ from sqlalchemy.orm import Session
 from slim_quality.domain.actor import QualityActor
 from slim_quality.domain.audits import AuditOutcome, AuditRecord
 from slim_quality.domain.changes import ChangeRequest, Decision
+from slim_quality.domain.complaints import Complaint, ComplaintEntry
 from slim_quality.domain.enums import ChangeKind, EventKind
+from slim_quality.domain.equipment import Equipment, EquipmentEntry, EquipmentKind
 from slim_quality.domain.limits import LimitSet
+from slim_quality.domain.materials import LotEntry, ReferenceLot
 from slim_quality.domain.nonconformity import NcEntry, NcSource, Nonconformity
 from slim_quality.domain.profile import Profile
+from slim_quality.domain.pt import PtEntry, PtRound
 from slim_quality.domain.records import PointNote, QcReview, QualityEvent
 from slim_quality.persistence.tables import (
     quality_audits,
     quality_changes,
+    quality_complaint_entries,
+    quality_complaints,
     quality_decisions,
+    quality_equipment,
+    quality_equipment_entries,
     quality_events,
     quality_limit_sets,
+    quality_lot_entries,
+    quality_lots,
     quality_nc_entries,
     quality_ncs,
     quality_notes,
     quality_profiles,
+    quality_pt_entries,
+    quality_pt_rounds,
     quality_reviews,
 )
 from slim_quality.persistence.types import db_now
@@ -391,6 +403,262 @@ def list_ncs(session: Session, as_of: datetime | None = None, ids=()) -> list[No
             raised_by=_actor(r.by),
             raised_at=r.created_at,
             entries=tuple(entries.get(r.id, ())),
+        )
+        for r in rows
+    ]
+
+
+# --- equipment, lots, PT rounds, complaints (D-125…D-130) ---------------------------------------------
+# Each is a header row (what was registered) and its entries, oldest first; the domain object is rebuilt
+# from both. Locking the header row serialises entries, as for nonconformities.
+
+
+def _lock(session: Session, table, row_id: int, what: str) -> None:
+    found = session.scalar(select(table.c.id).where(table.c.id == row_id).with_for_update())
+    if found is None:
+        raise NotFound(f"no {what} {row_id}")
+
+
+def _entries_of(session: Session, table, parent: str, ids, model, as_of) -> dict[int, list]:
+    found: dict[int, list] = {}
+    if not ids:
+        return found
+    rows = session.execute(
+        select(table)
+        .where(table.c[parent].in_(ids), as_of_filter(table.c.created_at, as_of))
+        .order_by(table.c.id)
+    )
+    for e in rows:
+        found.setdefault(getattr(e, parent), []).append(model.model_validate(e.entry | {"at": e.created_at}))
+    return found
+
+
+def _add_entry(session: Session, table, parent: str, parent_id: int, entry) -> None:
+    session.execute(
+        table.insert().values(
+            **{parent: parent_id},
+            kind=int(entry.kind),
+            entry=entry.model_dump(mode="json", exclude={"at"}),
+            by_id=entry.by.id,
+            by=entry.by.model_dump(mode="json"),
+        )
+    )
+
+
+def add_equipment(session: Session, item: Equipment) -> Equipment:
+    item_id = session.execute(
+        quality_equipment.insert().values(
+            name=item.name,
+            kind=int(item.kind),
+            description=item.description,
+            calibration_required=item.calibration_required,
+            by_id=item.registered_by.id,
+            by=item.registered_by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return get_equipment(session, item_id)
+
+
+def add_equipment_entry(session: Session, item_id: int, entry: EquipmentEntry) -> Equipment:
+    _add_entry(session, quality_equipment_entries, "equipment_id", item_id, entry)
+    return get_equipment(session, item_id)
+
+
+def lock_equipment(session: Session, item_id: int) -> None:
+    _lock(session, quality_equipment, item_id, "equipment")
+
+
+def get_equipment(session: Session, item_id: int, as_of: datetime | None = None) -> Equipment:
+    found = list_equipment(session, as_of=as_of, ids=(item_id,))
+    if not found:
+        raise NotFound(f"no equipment {item_id}")
+    return found[0]
+
+
+def list_equipment(session: Session, as_of: datetime | None = None, ids=()) -> list[Equipment]:
+    """By name."""
+    where = [as_of_filter(quality_equipment.c.created_at, as_of)]
+    if ids:
+        where.append(quality_equipment.c.id.in_(ids))
+    rows = session.execute(select(quality_equipment).where(*where).order_by(quality_equipment.c.name)).all()
+    entries = _entries_of(
+        session, quality_equipment_entries, "equipment_id", [r.id for r in rows], EquipmentEntry, as_of
+    )
+    return [
+        Equipment(
+            id=r.id,
+            name=r.name,
+            kind=EquipmentKind(r.kind),
+            description=r.description,
+            calibration_required=r.calibration_required,
+            registered_by=_actor(r.by),
+            registered_at=r.created_at,
+            entries=tuple(entries.get(r.id, ())),
+        )
+        for r in rows
+    ]
+
+
+def add_lot(session: Session, lot: ReferenceLot) -> ReferenceLot:
+    lot_id = session.execute(
+        quality_lots.insert().values(
+            name=lot.name,
+            lot=lot.lot,
+            lot_record=lot.model_dump(mode="json", exclude={"id", "registered_at", "entries"}),
+            by_id=lot.registered_by.id,
+            by=lot.registered_by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return get_lot(session, lot_id)
+
+
+def add_lot_entry(session: Session, lot_id: int, entry: LotEntry) -> ReferenceLot:
+    _add_entry(session, quality_lot_entries, "lot_id", lot_id, entry)
+    return get_lot(session, lot_id)
+
+
+def lock_lot(session: Session, lot_id: int) -> None:
+    _lock(session, quality_lots, lot_id, "lot")
+
+
+def get_lot(session: Session, lot_id: int, as_of: datetime | None = None) -> ReferenceLot:
+    found = list_lots(session, as_of=as_of, ids=(lot_id,))
+    if not found:
+        raise NotFound(f"no lot {lot_id}")
+    return found[0]
+
+
+def find_lot(session: Session, name: str, lot: str, as_of: datetime | None = None) -> ReferenceLot | None:
+    row_id = session.scalar(
+        select(quality_lots.c.id).where(
+            quality_lots.c.name == name,
+            quality_lots.c.lot == lot,
+            as_of_filter(quality_lots.c.created_at, as_of),
+        )
+    )
+    return None if row_id is None else get_lot(session, row_id, as_of)
+
+
+def list_lots(session: Session, as_of: datetime | None = None, ids=()) -> list[ReferenceLot]:
+    where = [as_of_filter(quality_lots.c.created_at, as_of)]
+    if ids:
+        where.append(quality_lots.c.id.in_(ids))
+    rows = session.execute(
+        select(quality_lots).where(*where).order_by(quality_lots.c.name, quality_lots.c.lot)
+    ).all()
+    entries = _entries_of(session, quality_lot_entries, "lot_id", [r.id for r in rows], LotEntry, as_of)
+    return [
+        ReferenceLot.model_validate(
+            r.lot_record | {"id": r.id, "registered_at": r.created_at, "entries": entries.get(r.id, ())}
+        )
+        for r in rows
+    ]
+
+
+def add_pt_round(session: Session, pt: PtRound) -> PtRound:
+    round_id = session.execute(
+        quality_pt_rounds.insert().values(
+            scheme=pt.scheme,
+            round_code=pt.round_code,
+            tr_number=pt.tr_number,
+            round_record=pt.model_dump(mode="json", exclude={"id", "registered_at", "entries"}),
+            by_id=pt.registered_by.id,
+            by=pt.registered_by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return get_pt_round(session, round_id)
+
+
+def add_pt_entry(session: Session, round_id: int, entry: PtEntry) -> PtRound:
+    _add_entry(session, quality_pt_entries, "round_id", round_id, entry)
+    return get_pt_round(session, round_id)
+
+
+def lock_pt_round(session: Session, round_id: int) -> None:
+    _lock(session, quality_pt_rounds, round_id, "PT round")
+
+
+def get_pt_round(session: Session, round_id: int, as_of: datetime | None = None) -> PtRound:
+    found = list_pt_rounds(session, as_of=as_of, ids=(round_id,))
+    if not found:
+        raise NotFound(f"no PT round {round_id}")
+    return found[0]
+
+
+def list_pt_rounds(
+    session: Session, as_of: datetime | None = None, ids=(), tr_number: str | None = None
+) -> list[PtRound]:
+    """Newest first."""
+    where = [as_of_filter(quality_pt_rounds.c.created_at, as_of)]
+    if ids:
+        where.append(quality_pt_rounds.c.id.in_(ids))
+    if tr_number is not None:
+        where.append(quality_pt_rounds.c.tr_number == tr_number)
+    rows = session.execute(
+        select(quality_pt_rounds).where(*where).order_by(quality_pt_rounds.c.id.desc())
+    ).all()
+    entries = _entries_of(session, quality_pt_entries, "round_id", [r.id for r in rows], PtEntry, as_of)
+    return [
+        PtRound.model_validate(
+            r.round_record | {"id": r.id, "registered_at": r.created_at, "entries": entries.get(r.id, ())}
+        )
+        for r in rows
+    ]
+
+
+def add_complaint(session: Session, complaint: Complaint) -> Complaint:
+    complaint_id = session.execute(
+        quality_complaints.insert().values(
+            tr_number=complaint.tr_number,
+            customer_id=complaint.customer_id,
+            complaint=complaint.model_dump(mode="json", exclude={"id", "raised_at", "entries"}),
+            by_id=complaint.raised_by.id,
+            by=complaint.raised_by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return get_complaint(session, complaint_id)
+
+
+def add_complaint_entry(session: Session, complaint_id: int, entry: ComplaintEntry) -> Complaint:
+    _add_entry(session, quality_complaint_entries, "complaint_id", complaint_id, entry)
+    return get_complaint(session, complaint_id)
+
+
+def lock_complaint(session: Session, complaint_id: int) -> None:
+    _lock(session, quality_complaints, complaint_id, "complaint")
+
+
+def get_complaint(session: Session, complaint_id: int, as_of: datetime | None = None) -> Complaint:
+    found = list_complaints(session, as_of=as_of, ids=(complaint_id,))
+    if not found:
+        raise NotFound(f"no complaint {complaint_id}")
+    return found[0]
+
+
+def list_complaints(
+    session: Session,
+    as_of: datetime | None = None,
+    ids=(),
+    customer_id: str | None = None,
+    tr_number: str | None = None,
+) -> list[Complaint]:
+    """Newest first; `customer_id` narrows to one customer's (the host's scope)."""
+    where = [as_of_filter(quality_complaints.c.created_at, as_of)]
+    if ids:
+        where.append(quality_complaints.c.id.in_(ids))
+    if customer_id is not None:
+        where.append(quality_complaints.c.customer_id == customer_id)
+    if tr_number is not None:
+        where.append(quality_complaints.c.tr_number == tr_number)
+    rows = session.execute(
+        select(quality_complaints).where(*where).order_by(quality_complaints.c.id.desc())
+    ).all()
+    entries = _entries_of(
+        session, quality_complaint_entries, "complaint_id", [r.id for r in rows], ComplaintEntry, as_of
+    )
+    return [
+        Complaint.model_validate(
+            r.complaint | {"id": r.id, "raised_at": r.created_at, "entries": entries.get(r.id, ())}
         )
         for r in rows
     ]

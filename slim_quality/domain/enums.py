@@ -14,6 +14,7 @@ class Measure(IntEnum):
     CAL_LOD = 6  # the run's calibration: detection limit
     CAL_BEC = 7  # background equivalent concentration
     CAL_R = 8  # correlation coefficient
+    PT_Z = 9  # a proficiency-testing round's z-score, per scheme × analyte (D-129)
 
     @property
     def label(self) -> str:
@@ -33,6 +34,7 @@ _LABELS = {
     Measure.CAL_LOD: "Calibration LOD",
     Measure.CAL_BEC: "Calibration BEC",
     Measure.CAL_R: "Calibration r",
+    Measure.PT_Z: "PT z-score",
 }
 
 
@@ -49,7 +51,8 @@ class LimitMethod(IntEnum):
 
     HISTORY = 1  # mean and SD of a baseline
     ROBUST = 2  # median and 1.4826 × MAD of a baseline: a few contaminated points don't widen it
-    CERTIFICATE = 3  # entered: a certified value and its SD, or limits the lab sets
+    CERTIFICATE = 3  # entered: a certified value and its SD, or limits the lab sets (or the profile
+    #                  fixes, for a standardised measure such as a z-score: D-129)
 
 
 class QualityRole(IntEnum):
@@ -77,3 +80,15 @@ class EventKind(IntEnum):
     @property
     def label(self) -> str:
         return self.name.replace("_", " ").capitalize()
+
+
+class Effect(IntEnum):
+    """What a finding does where it is used (D-126), as slim-samples' bottle conditions (S-04)."""
+
+    RECORDED = 1  # shown on the register only
+    WARN = 2  # shown where it is used
+    BLOCK = 3  # refused where it is used
+
+    @property
+    def label(self) -> str:
+        return self.name.capitalize()

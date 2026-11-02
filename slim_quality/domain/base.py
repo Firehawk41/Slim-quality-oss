@@ -21,3 +21,8 @@ def _reject_float(value: Any) -> Any:
 
 Dec = Annotated[Decimal, BeforeValidator(_reject_float)]
 """A Decimal that refuses float input. Every measured or reported number uses it."""
+
+
+class NotAllowed(PermissionError):
+    """The facts (or the actor's role) don't allow this now. Defined here so every record can raise it;
+    `changes.NotAllowed` is the same class."""

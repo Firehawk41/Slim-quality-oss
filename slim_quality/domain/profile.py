@@ -7,7 +7,9 @@ from pydantic import Field, model_validator
 
 from slim_quality.domain.base import Dec, Frozen
 from slim_quality.domain.enums import LimitMethod, Measure, Severity
-from slim_quality.domain.limits import Window
+from slim_quality.domain.equipment import EquipmentPolicy
+from slim_quality.domain.limits import Limits, Window
+from slim_quality.domain.pt import PtPolicy
 
 
 class ToolSetting(Frozen):
@@ -19,19 +21,34 @@ class ToolSetting(Frozen):
 
 
 class MeasurePolicy(Frozen):
-    """How a measure's limits are set when nobody has approved any, and its acceptance window."""
+    """How a measure's limits are set when nobody has approved any, and its acceptance window. A
+    standardised measure (a z-score, D-129) has its limits fixed here instead: method certificate, with
+    the centre and SD."""
 
     method: LimitMethod = LimitMethod.HISTORY
     baseline_points: int = Field(default=20, ge=3, le=500)
     window_low: Dec | None = None
     window_high: Dec | None = None
+    center: Dec | None = None  # certificate only
+    sd: Dec | None = Field(default=None, gt=0)
 
     @model_validator(mode="after")
-    def _not_entered(self) -> Self:
-        if self.method == LimitMethod.CERTIFICATE:
-            raise ValueError("provisional limits come from a baseline: history or robust")
+    def _fixed_or_baseline(self) -> Self:
+        fixed = self.center is not None and self.sd is not None
+        if (self.method == LimitMethod.CERTIFICATE) != fixed:
+            raise ValueError("fixed limits (a centre and an SD) go with method certificate, and only with it")
+        if (self.center is None) != (self.sd is None):
+            raise ValueError("fixed limits give both a centre and an SD")
         Window(low=self.window_low, high=self.window_high)
         return self
+
+    @property
+    def fixed(self) -> Limits | None:
+        if self.method != LimitMethod.CERTIFICATE:
+            return None
+        return Limits(
+            method=LimitMethod.CERTIFICATE, center=self.center, sd=self.sd, basis="fixed by the profile"
+        )
 
     @property
     def window(self) -> Window:
@@ -42,6 +59,8 @@ class Profile(Frozen):
     version: int = Field(default=0, ge=0)  # 0 = the starter profile, never approved
     tools: tuple[ToolSetting, ...] = ()
     measures: dict[Measure, MeasurePolicy] = {}
+    equipment: EquipmentPolicy = EquipmentPolicy()  # D-126
+    pt: PtPolicy = PtPolicy()  # D-128
 
     @model_validator(mode="after")
     def _one_setting_per_tool(self) -> Self:
@@ -82,6 +101,18 @@ def differences(before: Profile, after: Profile) -> list[str]:
         a, b = before.policy(measure), after.policy(measure)
         if a != b:
             lines.append(f"{measure.label}: {_policy(a)} → {_policy(b)}")
+    for kind in sorted(set(before.equipment.overdue) | set(after.equipment.overdue)):
+        a, b = before.equipment.effect(kind), after.equipment.effect(kind)
+        if a != b:
+            lines.append(f"{kind.label} overdue: {a.label} → {b.label}")
+    for name, a, b in (
+        ("Unregistered equipment", before.equipment.unregistered.label, after.equipment.unregistered.label),
+        ("Equipment due within (days)", before.equipment.due_within_days, after.equipment.due_within_days),
+        ("PT questionable above |z|", before.pt.questionable, after.pt.questionable),
+        ("PT unsatisfactory from |z|", before.pt.unsatisfactory, after.pt.unsatisfactory),
+    ):
+        if _norm(a) != _norm(b):
+            lines.append(f"{name}: {a} → {b}")
     return lines
 
 
@@ -97,6 +128,8 @@ def _text(value) -> str:
 
 
 def _policy(p: MeasurePolicy) -> str:
+    if p.fixed is not None:
+        return f"fixed at {p.center} ± {p.sd} SD"
     low = "…" if p.window_low is None else p.window_low
     high = "…" if p.window_high is None else p.window_high
     window = f"{low}–{high}"
