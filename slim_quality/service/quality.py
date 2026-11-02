@@ -31,6 +31,7 @@ from slim_quality.domain.limits import Limits, LimitSet, baseline
 from slim_quality.domain.nonconformity import NcEntry, NcSource, Nonconformity
 from slim_quality.domain.ports import QcSource
 from slim_quality.domain.profile import Profile
+from slim_quality.domain.pt import z_series
 from slim_quality.domain.records import PointNote, QcReview, QualityEvent
 from slim_quality.domain.series import Series, SeriesKey
 from slim_quality.monitors.runner import Chart, check_profile, evaluate
@@ -56,9 +57,10 @@ def charts(
     as_of: datetime | None = None,
     profile: Profile | None = None,
 ) -> tuple[Chart, ...]:
-    """Every series judged on its whole history; with `since`, shown from then on (review 2026-10-30b Q5:
+    """The host's QC series and slim-quality's own PT z-scores (D-129). Every series judged on its whole
+    history; with `since`, shown from then on (review 2026-10-30b Q5:
     cutting the history first would move the provisional limits)."""
-    series = source.series(as_of=as_of)
+    series = (*source.series(as_of=as_of), *z_series(store.list_pt_rounds(session, as_of=as_of)))
     found = evaluate(series, profile or current_profile(session, as_of), store.limit_sets(session, as_of))
     return found if since is None else tuple(c.since(since) for c in found)
 
@@ -110,7 +112,7 @@ def backtest(
     candidate, both judged on the whole history (so the in-force counts are the charts' own). Nothing is
     stored."""
     check_profile(candidate)
-    series = source.series()
+    series = (*source.series(), *z_series(store.list_pt_rounds(session)))
     sets = store.limit_sets(session)
 
     def counted(profile: Profile) -> Counter:

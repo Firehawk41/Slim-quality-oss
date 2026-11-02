@@ -27,10 +27,21 @@ class NcSource(IntEnum):
     FLAG = 2
     EVENT = 3
     AUDIT = 4
+    EQUIPMENT = 5  # a failed calibration or check (D-126): `instrument` names the item, of any kind
+    PT = 6  # an unsatisfactory PT score (D-128)
+    COMPLAINT = 7  # D-130
 
     @property
     def label(self) -> str:
-        return {1: "Raised by hand", 2: "From a flag", 3: "From an event", 4: "From an audit"}[self]
+        return {
+            1: "Raised by hand",
+            2: "From a flag",
+            3: "From an event",
+            4: "From an audit",
+            5: "From equipment",
+            6: "From a PT round",
+            7: "From a complaint",
+        }[self]
 
 
 class NcState(IntEnum):

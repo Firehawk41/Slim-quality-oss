@@ -45,8 +45,15 @@ def test_baseline_refusals(values, method, message):
 def test_window_and_policy_validate():
     with pytest.raises(ValidationError, match="below its high end"):
         Window(low=D("2"), high=D("1"))
-    with pytest.raises(ValidationError, match="history or robust"):
-        MeasurePolicy(method=LimitMethod.CERTIFICATE)
+    with pytest.raises(ValidationError, match="go with method certificate"):
+        MeasurePolicy(method=LimitMethod.CERTIFICATE)  # a certificate without its values (D-129)
+    with pytest.raises(ValidationError, match="go with method certificate"):
+        MeasurePolicy(center=D("0"), sd=D("1"))
+    with pytest.raises(ValidationError, match="both a centre and an SD"):
+        MeasurePolicy(center=D("0"))
+    fixed = MeasurePolicy(method=LimitMethod.CERTIFICATE, center=D("0"), sd=D("1")).fixed
+    assert (fixed.center, fixed.sd, fixed.provisional) == (D("0"), D("1"), False)
+    assert MeasurePolicy().fixed is None
     with pytest.raises(ValidationError, match="below its high end"):
         MeasurePolicy(window_low=D("2"), window_high=D("1"))
     assert MeasurePolicy(window_high=D("5")).window == Window(high=D("5"))

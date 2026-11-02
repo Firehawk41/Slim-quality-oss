@@ -6,7 +6,19 @@ Portable: enums as ints, JSON via `JSON`, no ARRAY, no foreign keys into other m
 People are stored as id + the whole actor as JSON, as they stood at the time.
 """
 
-from sqlalchemy import JSON, Boolean, Column, Date, ForeignKey, Index, Integer, String, Table, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    Column,
+    Date,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Table,
+    Text,
+    UniqueConstraint,
+)
 
 from slim_quality.persistence.db import Base
 from slim_quality.persistence.types import UtcDateTime, db_now
@@ -153,3 +165,111 @@ TABLES = (
     "quality_ncs",
     "quality_nc_entries",
 )
+
+
+# --- phase 5a: equipment, reference lots, PT rounds, complaints (D-125…D-130) ------------------------
+# Each is a header row and its entries (the whole entry as JSON, as for nonconformities).
+
+quality_equipment = Table(
+    "quality_equipment",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(100), nullable=False, unique=True),  # as slim-data and slim-prep record it
+    Column("kind", Integer, nullable=False),  # EquipmentKind
+    Column("description", Text, nullable=False),
+    Column("calibration_required", Boolean, nullable=False),
+    *_by(),
+    _created(),
+)
+
+quality_equipment_entries = Table(
+    "quality_equipment_entries",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("equipment_id", ForeignKey("quality_equipment.id"), nullable=False, index=True),
+    Column("kind", Integer, nullable=False),  # EquipmentEntryKind
+    Column("entry", JSON, nullable=False),
+    *_by(),
+    _created(),
+)
+
+quality_lots = Table(
+    "quality_lots",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("name", String(100), nullable=False),
+    Column("lot", String(50), nullable=False),
+    Column("lot_record", JSON, nullable=False),  # the lot as registered (certificate and all)
+    *_by(),
+    _created(),
+    UniqueConstraint("name", "lot", name="uq_quality_lots_name_lot"),
+)
+
+quality_lot_entries = Table(
+    "quality_lot_entries",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("lot_id", ForeignKey("quality_lots.id"), nullable=False, index=True),
+    Column("kind", Integer, nullable=False),  # LotEntryKind
+    Column("entry", JSON, nullable=False),
+    *_by(),
+    _created(),
+)
+
+quality_pt_rounds = Table(
+    "quality_pt_rounds",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("scheme", String(100), nullable=False),
+    Column("round_code", String(50), nullable=False),
+    Column("tr_number", String(20), nullable=False, index=True),
+    Column("round_record", JSON, nullable=False),
+    *_by(),
+    _created(),
+    UniqueConstraint("scheme", "round_code", name="uq_quality_pt_rounds_scheme_round"),
+)
+
+quality_pt_entries = Table(
+    "quality_pt_entries",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("round_id", ForeignKey("quality_pt_rounds.id"), nullable=False, index=True),
+    Column("kind", Integer, nullable=False),  # PtEntryKind
+    Column("entry", JSON, nullable=False),
+    *_by(),
+    _created(),
+)
+
+quality_complaints = Table(
+    "quality_complaints",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("tr_number", String(20), nullable=False, index=True),
+    Column("customer_id", String(50), nullable=False, index=True),
+    Column("complaint", JSON, nullable=False),  # as raised
+    *_by(),
+    _created(),
+)
+
+quality_complaint_entries = Table(
+    "quality_complaint_entries",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("complaint_id", ForeignKey("quality_complaints.id"), nullable=False, index=True),
+    Column("kind", Integer, nullable=False),  # ComplaintEntryKind
+    Column("entry", JSON, nullable=False),
+    *_by(),
+    _created(),
+)
+
+TABLES_5A = (
+    "quality_equipment",
+    "quality_equipment_entries",
+    "quality_lots",
+    "quality_lot_entries",
+    "quality_pt_rounds",
+    "quality_pt_entries",
+    "quality_complaints",
+    "quality_complaint_entries",
+)
+TABLES = TABLES + TABLES_5A

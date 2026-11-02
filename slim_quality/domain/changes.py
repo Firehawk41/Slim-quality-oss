@@ -9,14 +9,10 @@ from typing import Self
 from pydantic import AwareDatetime, Field, model_validator
 
 from slim_quality.domain.actor import QualityActor
-from slim_quality.domain.base import Frozen
+from slim_quality.domain.base import Frozen, NotAllowed  # noqa: F401  (re-exported)
 from slim_quality.domain.enums import ChangeKind, ChangeStatus
 from slim_quality.domain.limits import LimitSet
 from slim_quality.domain.profile import Profile
-
-
-class NotAllowed(PermissionError):
-    pass
 
 
 class Decision(Frozen):

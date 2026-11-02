@@ -146,6 +146,16 @@ def evaluate(
 
 def _limits_per_point(s: Series, profile: Profile, sets: list[LimitSet]) -> list[Limits | None]:
     policy = profile.policy(s.key.measure)
+    if policy.fixed is not None:  # a standardised measure (D-129): an approved set still overrides
+        fixed = policy.fixed
+        found = []
+        for p in s.points:
+            current = fixed
+            for item in sets:
+                if item.effective_from <= p.at:
+                    current = item.limits
+            found.append(current)
+        return found
     first_set = sets[0].effective_from if sets else None
     early = [p for p in s.judged if first_set is None or p.at < first_set]
     provisional = None
