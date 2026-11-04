@@ -30,6 +30,7 @@ class NcSource(IntEnum):
     EQUIPMENT = 5  # a failed calibration or check (D-126): `instrument` names the item, of any kind
     PT = 6  # an unsatisfactory PT score (D-128)
     COMPLAINT = 7  # D-130
+    COMPETENCE = 8  # an act outside its authorisation (D-132)
 
     @property
     def label(self) -> str:
@@ -41,6 +42,7 @@ class NcSource(IntEnum):
             5: "From equipment",
             6: "From a PT round",
             7: "From a complaint",
+            8: "From the competence check",
         }[self]
 
 
