@@ -273,3 +273,41 @@ TABLES_5A = (
     "quality_complaint_entries",
 )
 TABLES = TABLES + TABLES_5A
+
+
+# --- phase 5b: uncertainty estimates, the authorisation register (D-131, D-132) ----------------------
+
+quality_uncertainty = Table(
+    "quality_uncertainty",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("key", String(250), nullable=False, index=True),  # UncertaintyKey.slug
+    Column("estimate", JSON, nullable=False),  # the whole estimate, inputs and all, as signed
+    *_by(),
+    _created(),
+)
+
+quality_authorisations = Table(
+    "quality_authorisations",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("person_id", String(100), nullable=False, index=True),
+    Column("act", Integer, nullable=False),  # Act
+    Column("authorisation", JSON, nullable=False),  # as granted
+    *_by(),
+    _created(),
+)
+
+quality_authorisation_entries = Table(
+    "quality_authorisation_entries",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("authorisation_id", ForeignKey("quality_authorisations.id"), nullable=False, index=True),
+    Column("kind", Integer, nullable=False),  # AuthorisationEntryKind
+    Column("entry", JSON, nullable=False),
+    *_by(),
+    _created(),
+)
+
+TABLES_5B = ("quality_uncertainty", "quality_authorisations", "quality_authorisation_entries")
+TABLES = TABLES + TABLES_5B

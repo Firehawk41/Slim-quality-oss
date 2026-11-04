@@ -10,6 +10,7 @@ from slim_quality.domain.enums import LimitMethod, Measure, Severity
 from slim_quality.domain.equipment import EquipmentPolicy
 from slim_quality.domain.limits import Limits, Window
 from slim_quality.domain.pt import PtPolicy
+from slim_quality.domain.uncertainty import UncertaintyPolicy
 
 
 class ToolSetting(Frozen):
@@ -61,6 +62,7 @@ class Profile(Frozen):
     measures: dict[Measure, MeasurePolicy] = {}
     equipment: EquipmentPolicy = EquipmentPolicy()  # D-126
     pt: PtPolicy = PtPolicy()  # D-128
+    uncertainty: UncertaintyPolicy = UncertaintyPolicy()  # D-131
 
     @model_validator(mode="after")
     def _one_setting_per_tool(self) -> Self:
@@ -110,6 +112,17 @@ def differences(before: Profile, after: Profile) -> list[str]:
         ("Equipment due within (days)", before.equipment.due_within_days, after.equipment.due_within_days),
         ("PT questionable above |z|", before.pt.questionable, after.pt.questionable),
         ("PT unsatisfactory from |z|", before.pt.unsatisfactory, after.pt.unsatisfactory),
+        (
+            "Uncertainty: check points at least",
+            before.uncertainty.min_precision_points,
+            after.uncertainty.min_precision_points,
+        ),
+        (
+            "Uncertainty: CRM or PT results at least",
+            before.uncertainty.min_bias_points,
+            after.uncertainty.min_bias_points,
+        ),
+        ("Uncertainty: coverage factor k", before.uncertainty.k, after.uncertainty.k),
     ):
         if _norm(a) != _norm(b):
             lines.append(f"{name}: {a} → {b}")

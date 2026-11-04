@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from slim_quality.domain.actor import QualityActor
 from slim_quality.domain.audits import AuditOutcome, AuditRecord
 from slim_quality.domain.changes import ChangeRequest, Decision
+from slim_quality.domain.competence import Authorisation, AuthorisationEntry
 from slim_quality.domain.complaints import Complaint, ComplaintEntry
 from slim_quality.domain.enums import ChangeKind, EventKind
 from slim_quality.domain.equipment import Equipment, EquipmentEntry, EquipmentKind
@@ -18,8 +19,11 @@ from slim_quality.domain.nonconformity import NcEntry, NcSource, Nonconformity
 from slim_quality.domain.profile import Profile
 from slim_quality.domain.pt import PtEntry, PtRound
 from slim_quality.domain.records import PointNote, QcReview, QualityEvent
+from slim_quality.domain.uncertainty import UncertaintyEstimate
 from slim_quality.persistence.tables import (
     quality_audits,
+    quality_authorisation_entries,
+    quality_authorisations,
     quality_changes,
     quality_complaint_entries,
     quality_complaints,
@@ -37,6 +41,7 @@ from slim_quality.persistence.tables import (
     quality_pt_entries,
     quality_pt_rounds,
     quality_reviews,
+    quality_uncertainty,
 )
 from slim_quality.persistence.types import db_now
 
@@ -659,6 +664,102 @@ def list_complaints(
     return [
         Complaint.model_validate(
             r.complaint | {"id": r.id, "raised_at": r.created_at, "entries": entries.get(r.id, ())}
+        )
+        for r in rows
+    ]
+
+
+# --- uncertainty estimates, authorisations (D-131, D-132) ------------------------------------------------
+
+
+def add_uncertainty(session: Session, estimate: UncertaintyEstimate) -> UncertaintyEstimate:
+    signer = estimate.signed_by
+    if signer is None:
+        raise ValueError("an estimate is recorded signed")
+    row_id = session.execute(
+        quality_uncertainty.insert().values(
+            key=estimate.key.slug,
+            estimate=estimate.model_dump(mode="json", exclude={"id", "signed_at"}),
+            by_id=signer.id,
+            by=signer.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return uncertainty_estimates(session, ids=(row_id,))[0]
+
+
+def uncertainty_estimates(
+    session: Session, as_of: datetime | None = None, ids=(), key: str | None = None
+) -> list[UncertaintyEstimate]:
+    """Newest first."""
+    where = [as_of_filter(quality_uncertainty.c.created_at, as_of)]
+    if ids:
+        where.append(quality_uncertainty.c.id.in_(ids))
+    if key is not None:
+        where.append(quality_uncertainty.c.key == key)
+    rows = session.execute(
+        select(quality_uncertainty).where(*where).order_by(quality_uncertainty.c.id.desc())
+    ).all()
+    return [
+        UncertaintyEstimate.model_validate(r.estimate | {"id": r.id, "signed_at": r.created_at}) for r in rows
+    ]
+
+
+def add_authorisation(session: Session, authorisation: Authorisation) -> Authorisation:
+    row_id = session.execute(
+        quality_authorisations.insert().values(
+            person_id=authorisation.person.id,
+            act=int(authorisation.act),
+            authorisation=authorisation.model_dump(mode="json", exclude={"id", "granted_at", "entries"}),
+            by_id=authorisation.granted_by.id,
+            by=authorisation.granted_by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return get_authorisation(session, row_id)
+
+
+def add_authorisation_entry(
+    session: Session, authorisation_id: int, entry: AuthorisationEntry
+) -> Authorisation:
+    _add_entry(session, quality_authorisation_entries, "authorisation_id", authorisation_id, entry)
+    return get_authorisation(session, authorisation_id)
+
+
+def lock_authorisation(session: Session, authorisation_id: int) -> None:
+    _lock(session, quality_authorisations, authorisation_id, "authorisation")
+
+
+def get_authorisation(
+    session: Session, authorisation_id: int, as_of: datetime | None = None
+) -> Authorisation:
+    found = list_authorisations(session, as_of=as_of, ids=(authorisation_id,))
+    if not found:
+        raise NotFound(f"no authorisation {authorisation_id}")
+    return found[0]
+
+
+def list_authorisations(
+    session: Session, as_of: datetime | None = None, ids=(), person_id: str | None = None
+) -> list[Authorisation]:
+    """Oldest first: the register as it stood at `as_of`."""
+    where = [as_of_filter(quality_authorisations.c.created_at, as_of)]
+    if ids:
+        where.append(quality_authorisations.c.id.in_(ids))
+    if person_id is not None:
+        where.append(quality_authorisations.c.person_id == person_id)
+    rows = session.execute(
+        select(quality_authorisations).where(*where).order_by(quality_authorisations.c.id)
+    ).all()
+    entries = _entries_of(
+        session,
+        quality_authorisation_entries,
+        "authorisation_id",
+        [r.id for r in rows],
+        AuthorisationEntry,
+        as_of,
+    )
+    return [
+        Authorisation.model_validate(
+            r.authorisation | {"id": r.id, "granted_at": r.created_at, "entries": entries.get(r.id, ())}
         )
         for r in rows
     ]
