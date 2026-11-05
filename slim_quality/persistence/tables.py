@@ -311,3 +311,79 @@ quality_authorisation_entries = Table(
 
 TABLES_5B = ("quality_uncertainty", "quality_authorisations", "quality_authorisation_entries")
 TABLES = TABLES + TABLES_5B
+
+
+# --- phase 5c: risks, internal audits, management reviews, validation signatures (D-134…D-137) -----------
+
+quality_risks = Table(
+    "quality_risks",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("kind", Integer, nullable=False),  # RiskKind
+    Column("risk", JSON, nullable=False),  # as raised
+    *_by(),
+    _created(),
+)
+
+quality_risk_entries = Table(
+    "quality_risk_entries",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("risk_id", ForeignKey("quality_risks.id"), nullable=False, index=True),
+    Column("kind", Integer, nullable=False),  # RiskEntryKind
+    Column("entry", JSON, nullable=False),
+    *_by(),
+    _created(),
+)
+
+quality_internal_audits = Table(
+    "quality_internal_audits",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("clause", String(20), nullable=False, index=True),
+    Column("planned_for", Date, nullable=False),  # its year is the programme's
+    Column("audit", JSON, nullable=False),  # as planned
+    *_by(),
+    _created(),
+)
+
+quality_internal_audit_entries = Table(
+    "quality_internal_audit_entries",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("audit_id", ForeignKey("quality_internal_audits.id"), nullable=False, index=True),
+    Column("kind", Integer, nullable=False),  # AuditEntryKind
+    Column("entry", JSON, nullable=False),
+    *_by(),
+    _created(),
+)
+
+quality_management_reviews = Table(
+    "quality_management_reviews",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("period_to", Date, nullable=False),
+    Column("review", JSON, nullable=False),  # the pack as signed, the inputs and the outputs
+    *_by(),
+    _created(),
+)
+
+quality_validation_signatures = Table(
+    "quality_validation_signatures",
+    metadata,
+    Column("id", Integer, primary_key=True),
+    Column("key", String(64), nullable=False, index=True),  # versions_key of what it covers
+    Column("signature", JSON, nullable=False),  # the versions and the pack, as signed
+    *_by(),
+    _created(),
+)
+
+TABLES_5C = (
+    "quality_risks",
+    "quality_risk_entries",
+    "quality_internal_audits",
+    "quality_internal_audit_entries",
+    "quality_management_reviews",
+    "quality_validation_signatures",
+)
+TABLES = TABLES + TABLES_5C

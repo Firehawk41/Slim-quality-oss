@@ -31,6 +31,7 @@ class NcSource(IntEnum):
     PT = 6  # an unsatisfactory PT score (D-128)
     COMPLAINT = 7  # D-130
     COMPETENCE = 8  # an act outside its authorisation (D-132)
+    RISK = 9  # a risk that happened (D-134)
 
     @property
     def label(self) -> str:
@@ -43,6 +44,7 @@ class NcSource(IntEnum):
             6: "From a PT round",
             7: "From a complaint",
             8: "From the competence check",
+            9: "From a risk",
         }[self]
 
 

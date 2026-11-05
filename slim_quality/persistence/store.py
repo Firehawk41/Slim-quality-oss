@@ -13,13 +13,17 @@ from slim_quality.domain.competence import Authorisation, AuthorisationEntry
 from slim_quality.domain.complaints import Complaint, ComplaintEntry
 from slim_quality.domain.enums import ChangeKind, EventKind
 from slim_quality.domain.equipment import Equipment, EquipmentEntry, EquipmentKind
+from slim_quality.domain.internal_audits import AuditEntry, InternalAudit
 from slim_quality.domain.limits import LimitSet
+from slim_quality.domain.management_review import ManagementReview
 from slim_quality.domain.materials import LotEntry, ReferenceLot
 from slim_quality.domain.nonconformity import NcEntry, NcSource, Nonconformity
 from slim_quality.domain.profile import Profile
 from slim_quality.domain.pt import PtEntry, PtRound
 from slim_quality.domain.records import PointNote, QcReview, QualityEvent
+from slim_quality.domain.risks import Risk, RiskEntry
 from slim_quality.domain.uncertainty import UncertaintyEstimate
+from slim_quality.domain.validation import ValidationSignature
 from slim_quality.persistence.tables import (
     quality_audits,
     quality_authorisation_entries,
@@ -31,9 +35,12 @@ from slim_quality.persistence.tables import (
     quality_equipment,
     quality_equipment_entries,
     quality_events,
+    quality_internal_audit_entries,
+    quality_internal_audits,
     quality_limit_sets,
     quality_lot_entries,
     quality_lots,
+    quality_management_reviews,
     quality_nc_entries,
     quality_ncs,
     quality_notes,
@@ -41,7 +48,10 @@ from slim_quality.persistence.tables import (
     quality_pt_entries,
     quality_pt_rounds,
     quality_reviews,
+    quality_risk_entries,
+    quality_risks,
     quality_uncertainty,
+    quality_validation_signatures,
 )
 from slim_quality.persistence.types import db_now
 
@@ -761,5 +771,151 @@ def list_authorisations(
         Authorisation.model_validate(
             r.authorisation | {"id": r.id, "granted_at": r.created_at, "entries": entries.get(r.id, ())}
         )
+        for r in rows
+    ]
+
+
+# --- risks, internal audits, management reviews, validation signatures (D-134…D-137) -------------------
+
+
+def add_risk(session: Session, risk: Risk) -> Risk:
+    row_id = session.execute(
+        quality_risks.insert().values(
+            kind=int(risk.kind),
+            risk=risk.model_dump(mode="json", exclude={"id", "raised_at", "entries"}),
+            by_id=risk.raised_by.id,
+            by=risk.raised_by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return get_risk(session, row_id)
+
+
+def add_risk_entry(session: Session, risk_id: int, entry: RiskEntry) -> Risk:
+    _add_entry(session, quality_risk_entries, "risk_id", risk_id, entry)
+    return get_risk(session, risk_id)
+
+
+def lock_risk(session: Session, risk_id: int) -> None:
+    _lock(session, quality_risks, risk_id, "risk")
+
+
+def get_risk(session: Session, risk_id: int, as_of: datetime | None = None) -> Risk:
+    found = list_risks(session, as_of=as_of, ids=(risk_id,))
+    if not found:
+        raise NotFound(f"no risk {risk_id}")
+    return found[0]
+
+
+def list_risks(session: Session, as_of: datetime | None = None, ids=()) -> list[Risk]:
+    """Oldest first."""
+    where = [as_of_filter(quality_risks.c.created_at, as_of)]
+    if ids:
+        where.append(quality_risks.c.id.in_(ids))
+    rows = session.execute(select(quality_risks).where(*where).order_by(quality_risks.c.id)).all()
+    entries = _entries_of(session, quality_risk_entries, "risk_id", [r.id for r in rows], RiskEntry, as_of)
+    return [
+        Risk.model_validate(
+            r.risk | {"id": r.id, "raised_at": r.created_at, "entries": entries.get(r.id, ())}
+        )
+        for r in rows
+    ]
+
+
+def add_internal_audit(session: Session, audit: InternalAudit) -> InternalAudit:
+    row_id = session.execute(
+        quality_internal_audits.insert().values(
+            clause=audit.clause,
+            planned_for=audit.planned_for,
+            audit=audit.model_dump(mode="json", exclude={"id", "planned_at", "entries"}),
+            by_id=audit.planned_by.id,
+            by=audit.planned_by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return get_internal_audit(session, row_id)
+
+
+def add_internal_audit_entry(session: Session, audit_id: int, entry: AuditEntry) -> InternalAudit:
+    _add_entry(session, quality_internal_audit_entries, "audit_id", audit_id, entry)
+    return get_internal_audit(session, audit_id)
+
+
+def lock_internal_audit(session: Session, audit_id: int) -> None:
+    _lock(session, quality_internal_audits, audit_id, "internal audit")
+
+
+def get_internal_audit(session: Session, audit_id: int, as_of: datetime | None = None) -> InternalAudit:
+    found = list_internal_audits(session, as_of=as_of, ids=(audit_id,))
+    if not found:
+        raise NotFound(f"no internal audit {audit_id}")
+    return found[0]
+
+
+def list_internal_audits(
+    session: Session, as_of: datetime | None = None, ids=(), year: int | None = None
+) -> list[InternalAudit]:
+    """By planned day, then id."""
+    t = quality_internal_audits
+    where = [as_of_filter(t.c.created_at, as_of)]
+    if ids:
+        where.append(t.c.id.in_(ids))
+    rows = session.execute(select(t).where(*where).order_by(t.c.planned_for, t.c.id)).all()
+    if year is not None:
+        rows = [r for r in rows if r.planned_for.year == year]
+    entries = _entries_of(
+        session, quality_internal_audit_entries, "audit_id", [r.id for r in rows], AuditEntry, as_of
+    )
+    return [
+        InternalAudit.model_validate(
+            r.audit | {"id": r.id, "planned_at": r.created_at, "entries": entries.get(r.id, ())}
+        )
+        for r in rows
+    ]
+
+
+def add_management_review(session: Session, review: ManagementReview) -> ManagementReview:
+    row_id = session.execute(
+        quality_management_reviews.insert().values(
+            period_to=review.pack.period_to,
+            review=review.model_dump(mode="json", exclude={"id", "signed_at"}),
+            by_id=review.signed_by.id,
+            by=review.signed_by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return management_reviews(session, ids=(row_id,))[0]
+
+
+def management_reviews(session: Session, as_of: datetime | None = None, ids=()) -> list[ManagementReview]:
+    """Newest first."""
+    t = quality_management_reviews
+    where = [as_of_filter(t.c.created_at, as_of)]
+    if ids:
+        where.append(t.c.id.in_(ids))
+    rows = session.execute(select(t).where(*where).order_by(t.c.id.desc())).all()
+    return [ManagementReview.model_validate(r.review | {"id": r.id, "signed_at": r.created_at}) for r in rows]
+
+
+def add_validation_signature(session: Session, signature: ValidationSignature) -> ValidationSignature:
+    row_id = session.execute(
+        quality_validation_signatures.insert().values(
+            key=signature.key,
+            signature=signature.model_dump(mode="json", exclude={"id", "signed_at"}),
+            by_id=signature.signed_by.id,
+            by=signature.signed_by.model_dump(mode="json"),
+        )
+    ).inserted_primary_key[0]
+    return validation_signatures(session, ids=(row_id,))[0]
+
+
+def validation_signatures(
+    session: Session, as_of: datetime | None = None, ids=()
+) -> list[ValidationSignature]:
+    """Newest first."""
+    t = quality_validation_signatures
+    where = [as_of_filter(t.c.created_at, as_of)]
+    if ids:
+        where.append(t.c.id.in_(ids))
+    rows = session.execute(select(t).where(*where).order_by(t.c.id.desc())).all()
+    return [
+        ValidationSignature.model_validate(r.signature | {"id": r.id, "signed_at": r.created_at})
         for r in rows
     ]

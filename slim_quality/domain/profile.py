@@ -10,6 +10,8 @@ from slim_quality.domain.enums import LimitMethod, Measure, Severity
 from slim_quality.domain.equipment import EquipmentPolicy
 from slim_quality.domain.limits import Limits, Window
 from slim_quality.domain.pt import PtPolicy
+from slim_quality.domain.readiness import ReadinessPolicy
+from slim_quality.domain.risks import RiskPolicy
 from slim_quality.domain.uncertainty import UncertaintyPolicy
 
 
@@ -63,6 +65,8 @@ class Profile(Frozen):
     equipment: EquipmentPolicy = EquipmentPolicy()  # D-126
     pt: PtPolicy = PtPolicy()  # D-128
     uncertainty: UncertaintyPolicy = UncertaintyPolicy()  # D-131
+    risk: RiskPolicy = RiskPolicy()  # D-134
+    readiness: ReadinessPolicy = ReadinessPolicy()  # D-136
 
     @model_validator(mode="after")
     def _one_setting_per_tool(self) -> Self:
@@ -76,6 +80,17 @@ class Profile(Frozen):
 
     def setting(self, tool: str) -> ToolSetting | None:
         return next((t for t in self.tools if t.tool == tool), None)
+
+
+READINESS_LABELS = {
+    "audit_every_days": "audit each clause within (days)",
+    "nc_open_days": "NC open at most (days)",
+    "complaint_open_days": "complaint open at most (days)",
+    "uncertainty_max_age_days": "uncertainty estimate at most (days old)",
+    "pt_every_days": "a PT round scored within (days)",
+    "review_every_days": "management review within (days)",
+    "on_time_target": "on-time target (%)",
+}
 
 
 def differences(before: Profile, after: Profile) -> list[str]:
@@ -123,6 +138,16 @@ def differences(before: Profile, after: Profile) -> list[str]:
             after.uncertainty.min_bias_points,
         ),
         ("Uncertainty: coverage factor k", before.uncertainty.k, after.uncertainty.k),
+        ("Risk: medium from score", before.risk.medium_from, after.risk.medium_from),
+        ("Risk: high from score", before.risk.high_from, after.risk.high_from),
+        *(
+            (
+                f"Readiness: {READINESS_LABELS[name]}",
+                getattr(before.readiness, name),
+                getattr(after.readiness, name),
+            )
+            for name in READINESS_LABELS
+        ),
     ):
         if _norm(a) != _norm(b):
             lines.append(f"{name}: {a} → {b}")
