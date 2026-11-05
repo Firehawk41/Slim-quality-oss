@@ -5,6 +5,9 @@
 * Every limit set came from an approved limits change.
 * Every nonconformity's entries, replayed in order, were each allowed when they were added (a manager
   assessed and closed it, an action came after the assessment...), so its state is one the rules reach.
+* The same replay for risks and internal audits (D-134, D-135); every management review and validation
+  signature was signed by a quality manager (D-136, D-137). An auditor's independence depends on who did
+  what in the year before, so it is checked when planned and recorded, not replayed here.
 """
 
 from sqlalchemy import select
@@ -20,6 +23,8 @@ class QualityVerify(Frozen):
     profiles: int
     limit_sets: int
     nonconformities: int
+    risks: int = 0
+    internal_audits: int = 0
     problems: tuple[str, ...] = ()
 
     @property
@@ -50,14 +55,38 @@ def verify(session: Session) -> QualityVerify:
         if s.change_id not in approved
     ]
     ncs = store.list_ncs(session)
-    for nc in ncs:
-        replayed = nc.model_copy(update={"entries": ()})
-        for n, entry in enumerate(nc.entries, start=1):
-            try:
-                replayed.check(entry)
-            except NotAllowed as refused:
-                problems.append(f"{nc.number} entry {n} ({entry.kind.name.lower()}): {refused}")
-            replayed = replayed.model_copy(update={"entries": (*replayed.entries, entry)})
+    risks = store.list_risks(session)
+    audits = store.list_internal_audits(session)
+    for record in (*ncs, *risks, *audits):
+        problems += _replay(record)
+    problems += [
+        f"{r.number} was signed by {r.signed_by.display}, not a quality manager"
+        for r in store.management_reviews(session)
+        if not r.signed_by.is_manager
+    ]
+    problems += [
+        f"validation signature {s.id} was signed by {s.signed_by.display}, not a quality manager"
+        for s in store.validation_signatures(session)
+        if not s.signed_by.is_manager
+    ]
     return QualityVerify(
-        profiles=len(versions), limit_sets=len(sets), nonconformities=len(ncs), problems=tuple(problems)
+        profiles=len(versions),
+        limit_sets=len(sets),
+        nonconformities=len(ncs),
+        risks=len(risks),
+        internal_audits=len(audits),
+        problems=tuple(problems),
     )
+
+
+def _replay(record) -> list[str]:
+    """Each entry, checked against the record as it stood before it."""
+    problems = []
+    replayed = record.model_copy(update={"entries": ()})
+    for n, entry in enumerate(record.entries, start=1):
+        try:
+            replayed.check(entry)
+        except NotAllowed as refused:
+            problems.append(f"{record.number} entry {n} ({entry.kind.name.lower()}): {refused}")
+        replayed = replayed.model_copy(update={"entries": (*replayed.entries, entry)})
+    return problems
